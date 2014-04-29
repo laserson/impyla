@@ -32,7 +32,7 @@ with open(local_path_to_ir, 'rb') as ip:
     n1 = map(lambda f: f.name, bc.functions)
     n2 = filter(lambda name: udf_name in name, n1)
     if len(n2) != 1:
-	raise ValueError("There should be exactly one %s fn; found %i" % (udf_name, len(n2)))
+        raise ValueError("There should be exactly one %s fn; found %i" % (udf_name, len(n2)))
     name = n2[0]
 
 call(cmd_transfer_to_bottou, shell=True)

@@ -14,7 +14,7 @@ from numba.ext.impala import udf, BooleanVal, TinyIntVal, SmallIntVal, IntVal, B
 @udf(IntVal(FunctionContext, IntVal, IntVal))
 def AddUdf(context, arg1, arg2):
     if arg1.is_null or arg2.is_null:
-	return IntVal.null
+        return IntVal.null
     x = "hello"
     return IntVal(arg1.val + len(x))
 
