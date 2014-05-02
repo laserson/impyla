@@ -367,12 +367,54 @@ class ImpalaTargetContext(BaseContext):
         else:
             return super(ImpalaTargetContext, self).get_data_type(ty)
 
+    def allocate_stringval(self, builder, size):
+        # allocate a StringVal with size bytes
+        module = cgutils.get_module(builder)
+        precomp_func = self._get_precompiled_function("AllocateStringVal")
+        func = module.get_or_insert_function(precomp_func.type.pointee, precomp_func.name)
+        fnctx_arg = self.get_arguments(cgutils.get_function(builder))[0]
+        cfnctx_arg = builder.bitcast(fnctx_arg, func.args[0].type)
+        lowered_size = lc.Constant.int(lc.Type.int(32), size)
+        array_as_lowered_struct = builder.call(func, [cfnctx_arg, lowered_size])
+        array_as_struct = raise_return_type(self, builder, StringVal, array_as_lowered_struct)
+        array_as_StringVal = StringValStruct(self, builder, value=array_as_struct)
+        array_as_numba = self.make_array(sig.return_type)(self, builder)
+        data_ptr = builder.bitcast(array_as_StringVal.ptr, array_as_numba.data.type)
+        array_as_numba.data = data_ptr
+        return array_as_numba._getvalue()
+
     def get_array(self, builder, itemvals, itemtys):
+        import ipdb
+        ipdb.set_trace()
         # only handle uniform type
         assert all(x == itemtys[0] for x in itemtys)
-        if ty not in self._impala_types:
-            raise NotImplementedError("Arrays of non-Impala types not supported")
-
+        ty = itemtys[0]
+        # only handle types that are castable to Impala *Val types
+        # TODO(laserson): this is currently very conservative wrt to the *Val
+        #   type; can I figure out the proper *Val instead?
+        if ty == ntypes.string:
+            ctor = StringVal_ctor
+        elif ty in ntypes.integer_domain:
+            ctor = BigIntVal_ctor
+        elif ty in ntypes.real_domain:
+            ctor = DoubleVal_ctor
+        elif ty in self._impala_types:
+            # TODO(laserson): do I need this case?
+            pass
+        else:
+            raise NotImplementedError("Invalid type for array")
+        impala_vals = [ctor(self, builder, None, [v]) for v in itemvals]
+        ptr = builder.alloca(lc.Type.array(impala_vals[0].type, len(itemvals)))
+        arr = builder.load(ptr)
+        for (i, v) in enumerate(impala_vals):
+            builder.insert_value(arr, v, [lc.Constant.int(lc.Type.int(64), i)])
+        
+        
+        val_arr = cgutils.pack_array(builder, impala_vals)
+        arrty = self.make_array(ntypes.Array(StringVal, 1, 'C'))
+        numba_arr = arrty(self, builder)
+        numba_arr
+        return cgutils.pack_array(builder, impala_vals)
 
     def build_pass_manager(self):
         opt = 0 # let Impala optimize

@@ -37,6 +37,10 @@ StringVal AddStringValImpl(FunctionContext* context, const StringVal& s1, const 
     return retval;
 }
 
+StringVal AllocateStringVal(FunctionContext* context, int size) {
+    
+}
+
 
 // Python string module
 
