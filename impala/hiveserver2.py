@@ -98,7 +98,8 @@ class HiveServer2Cursor(Cursor):
 
     def __init__(self, service, session_handle, default_config=None,
                  hs2_protocol_version=(
-                     TProtocolVersion.HIVE_CLI_SERVICE_PROTOCOL_V6)):
+                     TProtocolVersion.HIVE_CLI_SERVICE_PROTOCOL_V6),
+                 parse_timestamp=True, parse_decimal=True):
         log.debug('HiveServer2Cursor(service=%s, session_handle=%s, '
                   'default_config=%s, hs2_protocol_version=%s)', service,
                   session_handle, default_config, hs2_protocol_version)
@@ -106,6 +107,8 @@ class HiveServer2Cursor(Cursor):
         self.session_handle = session_handle
         self.default_config = default_config
         self.hs2_protocol_version = hs2_protocol_version
+        self.parse_timestamp = parse_timestamp
+        self.parse_decimal = parse_decimal
 
         self._last_operation_string = None
         self._last_operation_handle = None
@@ -336,8 +339,8 @@ class HiveServer2Cursor(Cursor):
         while True:
             batch = fetch_results(
                 self.service, self._last_operation_handle,
-                self.hs2_protocol_version, self.description,
-                self.buffersize)
+                self.hs2_protocol_version, self.description, self.buffersize,
+                self.parse_timestamp, self.parse_decimal)
             if len(batch) == 0:
                 break
             batches.append(batch)
@@ -369,7 +372,8 @@ class HiveServer2Cursor(Cursor):
                       'more data')
             self._buffer = fetch_results(
                 self.service, self._last_operation_handle,
-                self.hs2_protocol_version, self.description, self.buffersize)
+                self.hs2_protocol_version, self.description, self.buffersize,
+                self.parse_timestamp, self.parse_decimal)
             if len(self._buffer) == 0:
                 log.debug('__next__: no more data to fetch')
                 raise StopIteration
@@ -750,7 +754,8 @@ class Column(object):
 
 
 class CBatch(Batch):
-    def __init__(self, trowset, schema):
+    def __init__(self, trowset, schema, parse_timestamp=True,
+                 parse_decimal=True):
         self.schema = schema
         tcols = [_TTypeId_to_TColumnValue_getters[schema[i][1]](col)
                  for (i, col) in enumerate(trowset.columns)]
@@ -777,11 +782,11 @@ class CBatch(Batch):
                 to_append = ((len(values) - len(nulls) + 7) // 8)
                 is_null.frombytes(b'\x00' * to_append)
 
-            if type_ == 'TIMESTAMP':
+            if parse_timestamp and type_ == 'TIMESTAMP':
                 for i in range(num_rows):
                     values[i] = (None if is_null[i] else
                                  _parse_timestamp(values[i]))
-            if type_ == 'DECIMAL':
+            if parse_decimal and type_ == 'DECIMAL':
                 for i in range(num_rows):
                     values[i] = (None if is_null[i] else Decimal(values[i]))
 
@@ -799,7 +804,8 @@ class CBatch(Batch):
 
 
 class RBatch(Batch):
-    def __init__(self, trowset, schema):
+    def __init__(self, trowset, schema, parse_timestamp=True,
+                 parse_decimal=True):
         log.debug('RBatch: input TRowSet: %s', trowset)
         self.schema = schema
         self.rows = []
@@ -808,9 +814,9 @@ class RBatch(Batch):
             for (i, col_val) in enumerate(trow.colVals):
                 type_ = schema[i][1]
                 value = _TTypeId_to_TColumnValue_getters[type_](col_val).value
-                if type_ == 'TIMESTAMP':
+                if parse_timestamp and type_ == 'TIMESTAMP':
                     value = _parse_timestamp(value)
-                elif type_ == 'DECIMAL':
+                elif parse_decimal and type_ == 'DECIMAL':
                     if value:
                         value = Decimal(value)
                 row.append(value)
@@ -825,7 +831,8 @@ class RBatch(Batch):
 
 @retry
 def fetch_results(service, operation_handle, hs2_protocol_version, schema=None,
-                  max_rows=1024, orientation=TFetchOrientation.FETCH_NEXT):
+                  max_rows=1024, orientation=TFetchOrientation.FETCH_NEXT,
+                  parse_timestamp=True, parse_decimal=True):
     # pylint: disable=too-many-locals,too-many-branches,protected-access
     if not operation_handle.hasResultSet:
         log.debug('fetch_results: operation_handle.hasResultSet=False')
@@ -846,10 +853,10 @@ def fetch_results(service, operation_handle, hs2_protocol_version, schema=None,
 
     if _is_columnar_protocol(hs2_protocol_version):
         log.debug('fetch_results: constructing CBatch')
-        return CBatch(resp.results, schema)
+        return CBatch(resp.results, schema, parse_timestamp, parse_decimal)
     elif _is_precolumnar_protocol(hs2_protocol_version):
         log.debug('fetch_results: constructing RBatch')
-        return RBatch(resp.results, schema)
+        return RBatch(resp.results, schema, parse_timestamp, parse_decimal)
     else:
         raise HiveServer2Error(
             "Got HiveServer2 version {0}; expected V1 - V6".format(
